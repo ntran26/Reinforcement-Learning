@@ -1,0 +1,44 @@
+name: Python CI
+
+on: [push, pull_request]
+
+jobs:
+
+  build:
+    name: Build package
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.9', '3.10', '3.11']
+
+    steps:
+      - name: Check out the repo
+        uses: actions/checkout@v3
+    
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v4.5.0
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: |
+          python3 -m pip install black isort flake8 pytest Pillow tensorflow matplotlib
+          python3 -m pip install -e .
+     
+      - name: Check codestyle
+        run: |
+          black --check ./
+
+      - name: Check codestyle
+        run: |
+          flake8 ./
+
+      - name: Check imports
+        run: |
+          isort --check-only ./
+
+      - name: Run pytest
+        run: |
+          pytest flappy_bird_gymnasium/tests/

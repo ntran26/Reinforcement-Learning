@@ -17,6 +17,6 @@ if __name__ == "__main__":
     state_dim = 12
     action_dim = 2
     net = DQN(state_dim, action_dim)
-    state = torch.randn(1, state_dim)
+    state = torch.randn(10, state_dim)
     output = net(state)
     print(output)

@@ -43,6 +43,8 @@ class Agent:
         self.discount_factor = hyperparameters['discount_factor']
         self.stop_on_reward = hyperparameters['stop_on_reward']
         self.fc1_nodes = hyperparameters['fc1_nodes']
+        self.enable_double_dqn = hyperparameters['enable_double_dqn']
+        self.enable_dueling_dqn = hyperparameters['enable_dueling_dqn']
 
         # Neural network
         self.loss_fn = nn.MSELoss()     # Mean squared error
@@ -54,13 +56,12 @@ class Agent:
         self.GRAPH_FILE = os.path.join(RUNS_DIR, f'{self.hyperparameters_set}.png')
 
     def run(self, is_training = True, render = False):
-        # env = gymnasium.make("FlappyBird-v0", render_mode="human" if render else None, use_lidar=True)
-        env = gymnasium.make("CartPole-v1", render_mode="human" if render else None)
+        env = gymnasium.make("FlappyBird-v0", render_mode="human" if render else None, use_lidar=True)
 
         num_state = env.observation_space.shape[0]
         num_action = env.action_space.n
 
-        policy_dqn = DQN(num_state, num_action, self.fc1_nodes).to(device)
+        policy_dqn = DQN(num_state, num_action, self.fc1_nodes, self.enable_dueling_dqn).to(device)
 
         # Initialize list to store rewards
         reward_per_episode = []
@@ -73,7 +74,7 @@ class Agent:
             epsilon = self.epsilon_init
 
             # Sync policy to target network
-            target_dqn = DQN(num_state, num_action, self.fc1_nodes).to(device)
+            target_dqn = DQN(num_state, num_action, self.fc1_nodes, self.enable_dueling_dqn).to(device)
             target_dqn.load_state_dict(policy_dqn.state_dict())
 
             # Track number of steps taken
@@ -133,7 +134,8 @@ class Agent:
             # Save the model when reached new best reward
             if is_training:
                 if episode_reward > best_reward:
-                    log_message = f"New best reward: {episode_reward:0.1f} ({(episode_reward - best_reward)}%)"
+                    log_message = f"{datetime.now().strftime(DATE_FORMAT)}: New best reward {episode_reward:0.2f} ({(episode_reward - best_reward)/best_reward*100:0.2f}%) at episode {episode}, saving model..."
+
                     print(log_message)
 
                     with open(self.LOG_FILE, 'a') as file:
@@ -148,21 +150,21 @@ class Agent:
                     self.save_graph(reward_per_episode, epsilon_history)
                     last_graph_update_time = current_time
 
-            # If enough experience has been collected
-            if len(memory) > self.mini_batch_size:
+                # If enough experience has been collected
+                if len(memory) > self.mini_batch_size:
 
-                # sample from memory
-                mini_batch = memory.sample(self.mini_batch_size)
-                self.optimize(mini_batch, policy_dqn, target_dqn)
+                    # sample from memory
+                    mini_batch = memory.sample(self.mini_batch_size)
+                    self.optimize(mini_batch, policy_dqn, target_dqn)
 
-                # Update epsilon
-                epsilon = max(epsilon * self.epsilon_decay, self.epsilon_min)
-                epsilon_history.append(epsilon)
+                    # Update epsilon
+                    epsilon = max(epsilon * self.epsilon_decay, self.epsilon_min)
+                    epsilon_history.append(epsilon)
 
-                # Copy policy network to target network after a certain number of steps
-                if step_count > self.network_sync_rate:
-                    target_dqn.load_state_dict(policy_dqn.state_dict())
-                    step_count = 0
+                    # Copy policy network to target network after a certain number of steps
+                    if step_count > self.network_sync_rate:
+                        target_dqn.load_state_dict(policy_dqn.state_dict())
+                        step_count = 0
 
     def optimize(self, mini_batch, policy, target):
         # for state, action, new_state, reward, terminated in mini_batch:
@@ -188,13 +190,18 @@ class Agent:
         terminations = torch.tensor(terminations).float().to(device)
 
         with torch.no_grad():
-            # calculate target Q value (expected returns)
-            target_q = rewards + (1-terminations) * self.discount_factor * target(new_states).max(dim=1)[0]
-            '''
-                target(new_states) => tensor([[1,2,3],[4,5,6]])
-                .max(dim=1)        => torch.return_types.max(values = tensor([3,6]), indices = tensor([3,0,0,1]))
-                [0]                => tensor([3,6])
-            '''
+            if self.enable_double_dqn:
+                best_actions_from_policy = policy(new_states).argmax(dim=1)
+                target_q = rewards + (1-terminations) * self.discount_factor * \
+                            target(new_states).gather(dim=1, index=best_actions_from_policy.unsqueeze(dim=1)).squeeze()
+            else:
+                # calculate target Q value (expected returns)
+                target_q = rewards + (1-terminations) * self.discount_factor * target(new_states).max(dim=1)[0]
+                '''
+                    target(new_states) => tensor([[1,2,3],[4,5,6]])
+                    .max(dim=1)        => torch.return_types.max(values = tensor([3,6]), indices = tensor([3,0,0,1]))
+                    [0]                => tensor([3,6])
+                '''
         
         # calculate Q values from current policy
         current_q = policy(states).gather(dim=1, index=actions.unsqueeze(dim=1)).squeeze()
@@ -239,7 +246,7 @@ class Agent:
         plt.close(fig)
 
 if __name__ == "__main__":
-    agent = Agent("cartpole1")
+    agent = Agent("flappy-bird")
 
     train = False
     if train:   # Train the model

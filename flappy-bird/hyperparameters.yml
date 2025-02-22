@@ -6,7 +6,7 @@ cartpole1:
   epsilon_decay: 0.9995
   epsilon_min: 0.05
   network_sync_rate: 10
-  learning_rate: 0.0001
+  learning_rate: 0.001
   discount_factor: 0.99
   stop_on_reward: 100000
   fc1_nodes: 10
@@ -16,5 +16,12 @@ flappy-bird:
   replay_memory_size: 100000
   mini_batch_size: 32
   epsilon_init: 1
-  epsilon_decay: 0.9995
+  epsilon_decay: 0.99995
   epsilon_min: 0.05
+  network_sync_rate: 10
+  learning_rate: 0.0001
+  discount_factor: 0.99
+  stop_on_reward: 100000
+  fc1_nodes: 512
+  enable_double_dqn: False
+  enable_dueling_dqn: True

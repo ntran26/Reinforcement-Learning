@@ -33,11 +33,11 @@ class PPOMemory:
     
     def store_memory(self, state, actions, probs, vals, rewards, dones):
         self.states.append(state)
-        self.states.append(actions)
-        self.states.append(probs)
-        self.states.append(vals)
-        self.states.append(rewards)
-        self.states.append(dones)
+        self.actions.append(actions)
+        self.probs.append(probs)
+        self.vals.append(vals)
+        self.rewards.append(rewards)
+        self.dones.append(dones)
 
     def clear_memory(self):
         self.states = []
@@ -82,5 +82,111 @@ class CriticNetwork(nn.Module):
 
         self.checkpoint_file = os.path.join(checkpoint_dir, "critic_torch_ppo")
         self.critic = nn.Sequential(
-            
+            nn.Linear(*input_dims, fc1_dims),
+            nn.ReLU(),
+            nn.Linear(fc1_dims, fc2_dims),
+            nn.ReLU(),
+            nn.Linear(fc2_dims, 1),
         )
+        self.optimizer = optim.Adam(self.parameters(), lr=alpha)
+        self.device = T.device("cuda=0" if T.cuda.is_available() else "cpu")
+        self.to(self.device)
+    
+    def forward(self, state):
+        value = self.critic(state)
+        return value
+
+    def save_checkpoint(self):
+        T.save(self.state_dict(), self.checkpoint_file)
+
+    def load_checkpoint(self):
+        self.load_state_dict(T.load(self.checkpoint_file))
+
+class Agent:
+    def __init__(self, n_actions, input_dims, gamma=0.99, alpha=0.0003, gae_lamda=0.95,
+                 clip=0.2, batch_size=64, N=2048, n_epochs=10):
+        self.gamma = gamma
+        self.clip = clip
+        self.n_epochs = n_epochs
+        self.gae_lambda = gae_lamda
+
+        self.actor = ActorNetwork(n_actions, input_dims, alpha)
+        self.critic = CriticNetwork(input_dims, alpha)
+        self.memory = PPOMemory(batch_size)
+
+    def remember(self, state, actions, probs, vals, reward, done):
+        self.memory.store_memory(state, actions, probs, vals, reward, done)
+    
+    def save_model(self):
+        print("Saving model")
+        self.actor.save_checkpoint()
+        self.critic.save_checkpoint()
+
+    def load_checkpoint(self):
+        print("Loading model")
+        self.actor.load_checkpoint()
+        self.critic.load_checkpoint()
+
+    def choose_action(self, observation):
+        state = T.tensor([observation], dtype=T.float).to(self.actor.device)
+
+        dist = self.actor(state)
+        value = self.critic(state)
+        action = dist.sample()
+
+        probs = T.squeeze(dist.log_prob(action)).item()
+        action = T.squeeze(action).item()
+        value = T.squeeze(value).item()
+
+        return action, probs, value
+    
+    def learn(self):
+        for _ in range(self.n_epochs):
+            state_arr, action_arr, old_probs_arr, vals_arr,\
+            reward_arr, dones_arr, batches = self.memory.generate_batches()
+
+            values = vals_arr
+            advantage = np.zeros(len(reward_arr), dtype=np.float32)
+
+            for t in range(len(reward_arr)-1):
+                discount = 1
+                a_t = 0     # initial advantage
+                for k in range(t, len(reward_arr)-1):
+                    a_t += discount*(reward_arr[k] + self.gamma*values[k+1] * \
+                                     (1-int(dones_arr[k])) - values[k])
+                    discount *= self.gamma * self.gae_lambda
+                advantage[t] = a_t
+            advantage = T.tensor(advantage).to(self.actor.device)
+
+            values = T.tensor(values).to(self.actor.device)
+            for batch in batches:
+                states = T.tensor(state_arr[batch], dtype=T.float).to(self.actor.device)
+                old_probs = T.tensor(old_probs[batch]).to(self.actor.device)
+                actions = T.tensor(action_arr[batch]).to(self.actor.device)
+
+                dist = self.actor(states)
+                critic_value = self.critic(states)
+
+                critic_value = T.squeeze(critic_value)
+
+                new_probs = dist.log_prob(actions)
+                prob_ratio = (new_probs - old_probs).exp()
+                weighted_probs = advantage[batch] * prob_ratio
+                weighted_clipped_probs = T.clamp(prob_ratio, 1-self.clip,
+                                            1+self.clip)*advantage[batch]
+                actor_loss = -T.min(weighted_probs, weighted_clipped_probs).mean()
+
+                returns = advantage[batch] + values[batch]
+                critic_loss = ((returns - critic_value)**2).mean()
+
+                total_loss = actor_loss + 0.5*critic_loss
+                self.actor.optimizer.zero_grad()
+                self.critic.optimizer.zero_grad()
+                total_loss.backward()
+                self.actor.optimizer.step()
+                self.critic.optimizer.step()
+
+        self.memory.clear_memory()
+
+
+                
